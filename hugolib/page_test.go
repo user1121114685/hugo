@@ -1436,7 +1436,7 @@ func TestIndexPageSimpleMethods(t *testing.T) {
 		{func(n *Page) bool { return n.IsNode() }},
 		{func(n *Page) bool { return !n.IsPage() }},
 		{func(n *Page) bool { return n.Scratch() != nil }},
-		{func(n *Page) bool { return n.Hugo() != nil }},
+		{func(n *Page) bool { return n.Hugo().Version() != "" }},
 	} {
 
 		n := s.newHomePage()
@@ -1495,6 +1495,45 @@ func TestChompBOM(t *testing.T) {
 	p := s.RegularPages[0]
 
 	checkPageTitle(t, p, "Simple")
+}
+
+func TestPageWithEmoji(t *testing.T) {
+	for _, enableEmoji := range []bool{true, false} {
+		v := viper.New()
+		v.Set("enableEmoji", enableEmoji)
+		b := newTestSitesBuilder(t)
+		b.WithViper(v)
+
+		b.WithSimpleConfigFile()
+
+		b.WithContent("page-emoji.md", `---
+title: "Hugo Smile"
+---
+This is a :smile:.
+<!--more--> 
+
+Another :smile: This is :not: an emoji.
+
+`)
+
+		b.CreateSites().Build(BuildCfg{})
+
+		if enableEmoji {
+			b.AssertFileContent("public/page-emoji/index.html",
+				"This is a 😄",
+				"Another 😄",
+				"This is :not: an emoji",
+			)
+		} else {
+			b.AssertFileContent("public/page-emoji/index.html",
+				"This is a :smile:",
+				"Another :smile:",
+				"This is :not: an emoji",
+			)
+		}
+
+	}
+
 }
 
 // https://github.com/gohugoio/hugo/issues/5381

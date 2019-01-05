@@ -17,6 +17,8 @@ import (
 	"bytes"
 	"io"
 
+	"github.com/gohugoio/hugo/helpers"
+
 	errors "github.com/pkg/errors"
 
 	bp "github.com/gohugoio/hugo/bufferpool"
@@ -89,7 +91,7 @@ Loop:
 			result.Write(it.Val)
 		case it.IsFrontMatter():
 			f := metadecoders.FormatFromFrontMatterType(it.Type)
-			m, err := metadecoders.UnmarshalToMap(it.Val, f)
+			m, err := metadecoders.Default.UnmarshalToMap(it.Val, f)
 			if err != nil {
 				if fe, ok := err.(herrors.FileError); ok {
 					return herrors.ToFileErrorWithOffset(fe, iter.LineNumber()-1)
@@ -149,6 +151,12 @@ Loop:
 			result.WriteString(placeHolder)
 			ordinal++
 			s.shortcodes.Add(placeHolder, currShortcode)
+		case it.Type == pageparser.TypeEmoji:
+			if emoji := helpers.Emoji(it.ValStr()); emoji != nil {
+				result.Write(emoji)
+			} else {
+				result.Write(it.Val)
+			}
 		case it.IsEOF():
 			break Loop
 		case it.IsError():
@@ -170,7 +178,10 @@ Loop:
 
 func (p *Page) parse(reader io.Reader) error {
 
-	parseResult, err := pageparser.Parse(reader)
+	parseResult, err := pageparser.Parse(
+		reader,
+		pageparser.Config{EnableEmoji: p.s.Cfg.GetBool("enableEmoji")},
+	)
 	if err != nil {
 		return err
 	}

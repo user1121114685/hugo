@@ -215,7 +215,7 @@ type parsedFile struct {
 func parseContentFile(r io.Reader) (parsedFile, error) {
 	var pf parsedFile
 
-	psr, err := pageparser.Parse(r)
+	psr, err := pageparser.Parse(r, pageparser.Config{})
 	if err != nil {
 		return pf, err
 	}
@@ -238,7 +238,7 @@ func parseContentFile(r io.Reader) (parsedFile, error) {
 
 	iter.PeekWalk(walkFn)
 
-	metadata, err := metadecoders.UnmarshalToMap(pf.frontMatterSource, pf.frontMatterFormat)
+	metadata, err := metadecoders.Default.UnmarshalToMap(pf.frontMatterSource, pf.frontMatterFormat)
 	if err != nil {
 		return pf, err
 	}

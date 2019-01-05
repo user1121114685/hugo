@@ -21,12 +21,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gohugoio/hugo/config"
+
+	"github.com/gohugoio/hugo/publisher"
+
 	"github.com/gohugoio/hugo/common/herrors"
 	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/langs"
-	"github.com/gohugoio/hugo/publisher"
 
 	"github.com/gohugoio/hugo/i18n"
 	"github.com/gohugoio/hugo/tpl"
@@ -52,6 +55,14 @@ type HugoSites struct {
 
 	// If enabled, keeps a revision map for all content.
 	gitInfo *gitInfo
+}
+
+func (h *HugoSites) siteInfos() SiteInfos {
+	infos := make(SiteInfos, len(h.Sites))
+	for i, site := range h.Sites {
+		infos[i] = &site.Info
+	}
+	return infos
 }
 
 func (h *HugoSites) pickOneAndLogTheRest(errors []error) error {
@@ -224,6 +235,27 @@ func applyDeps(cfg deps.DepsCfg, sites ...*Site) error {
 			continue
 		}
 
+		onCreated := func(d *deps.Deps) error {
+			s.Deps = d
+
+			// Set up the main publishing chain.
+			s.publisher = publisher.NewDestinationPublisher(d.PathSpec.BaseFs.PublishFs, s.outputFormatsConfig, s.mediaTypesConfig, cfg.Cfg.GetBool("minify"))
+
+			if err := s.initializeSiteInfo(); err != nil {
+				return err
+			}
+
+			d.Site = &s.Info
+
+			siteConfig, err := loadSiteConfig(s.Language)
+			if err != nil {
+				return err
+			}
+			s.siteConfig = siteConfig
+			s.siteRefLinker, err = newSiteRefLinker(s.Language, s)
+			return err
+		}
+
 		cfg.Language = s.Language
 		cfg.MediaTypes = s.mediaTypesConfig
 		cfg.OutputFormats = s.outputFormatsConfig
@@ -238,37 +270,23 @@ func applyDeps(cfg deps.DepsCfg, sites ...*Site) error {
 			}
 
 			d.OutputFormatsConfig = s.outputFormatsConfig
-			s.Deps = d
+
+			if err := onCreated(d); err != nil {
+				return err
+			}
 
 			if err = d.LoadResources(); err != nil {
 				return err
 			}
 
 		} else {
-			d, err = d.ForLanguage(cfg)
+			d, err = d.ForLanguage(cfg, onCreated)
 			if err != nil {
 				return err
 			}
 			d.OutputFormatsConfig = s.outputFormatsConfig
-			s.Deps = d
 		}
 
-		// Set up the main publishing chain.
-		s.publisher = publisher.NewDestinationPublisher(d.PathSpec.BaseFs.PublishFs, s.outputFormatsConfig, s.mediaTypesConfig, cfg.Cfg.GetBool("minify"))
-
-		if err := s.initializeSiteInfo(); err != nil {
-			return err
-		}
-
-		siteConfig, err := loadSiteConfig(s.Language)
-		if err != nil {
-			return err
-		}
-		s.siteConfig = siteConfig
-		s.siteRefLinker, err = newSiteRefLinker(s.Language, s)
-		if err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -345,14 +363,14 @@ func (h *HugoSites) resetLogs() {
 	}
 }
 
-func (h *HugoSites) createSitesFromConfig() error {
+func (h *HugoSites) createSitesFromConfig(cfg config.Provider) error {
 	oldLangs, _ := h.Cfg.Get("languagesSorted").(langs.Languages)
 
 	if err := loadLanguageSettings(h.Cfg, oldLangs); err != nil {
 		return err
 	}
 
-	depsCfg := deps.DepsCfg{Fs: h.Fs, Cfg: h.Cfg}
+	depsCfg := deps.DepsCfg{Fs: h.Fs, Cfg: cfg}
 
 	sites, err := createSitesFromConfig(depsCfg)
 
@@ -396,9 +414,9 @@ func (h *HugoSites) toSiteInfos() []*SiteInfo {
 type BuildCfg struct {
 	// Reset site state before build. Use to force full rebuilds.
 	ResetState bool
-	// Re-creates the sites from configuration before a build.
+	// If set, we re-create the sites from the given configuration before a build.
 	// This is needed if new languages are added.
-	CreateSitesFromConfig bool
+	NewConfig config.Provider
 	// Skip rendering. Useful for testing.
 	SkipRender bool
 	// Use this to indicate what changed (for rebuilds).
@@ -467,7 +485,7 @@ func (h *HugoSites) renderCrossSitesArtifacts() error {
 	smLayouts := []string{"sitemapindex.xml", "_default/sitemapindex.xml", "_internal/_default/sitemapindex.xml"}
 
 	return s.renderAndWriteXML(&s.PathSpec.ProcessingStats.Sitemaps, "sitemapindex",
-		sitemapDefault.Filename, h.toSiteInfos(), s.appendThemeTemplates(smLayouts)...)
+		sitemapDefault.Filename, h.toSiteInfos(), smLayouts...)
 }
 
 func (h *HugoSites) assignMissingTranslations() error {
@@ -530,7 +548,7 @@ func (h *HugoSites) createMissingPages() error {
 				if s.isEnabled(KindTaxonomyTerm) {
 					foundTaxonomyTermsPage := false
 					for _, p := range taxonomyTermsPages {
-						if p.sections[0] == plural {
+						if p.sectionsPath() == plural {
 							foundTaxonomyTermsPage = true
 							break
 						}
@@ -549,14 +567,24 @@ func (h *HugoSites) createMissingPages() error {
 						origKey := key
 
 						if s.Info.preserveTaxonomyNames {
-							key = s.PathSpec.MakeSegment(key)
+							key = s.PathSpec.MakePathSanitized(key)
 						}
 						for _, p := range taxonomyPages {
+							sectionsPath := p.sectionsPath()
+
+							if !strings.HasPrefix(sectionsPath, plural) {
+								continue
+							}
+
+							singularKey := strings.TrimPrefix(sectionsPath, plural)
+							singularKey = strings.TrimPrefix(singularKey, "/")
+
 							// Some people may have /authors/MaxMustermann etc. as paths.
 							// p.sections contains the raw values from the file system.
 							// See https://github.com/gohugoio/hugo/issues/4238
-							singularKey := s.PathSpec.MakePathSanitized(p.sections[1])
-							if p.sections[0] == plural && singularKey == key {
+							singularKey = s.PathSpec.MakePathSanitized(singularKey)
+
+							if singularKey == key {
 								foundTaxonomyPage = true
 								break
 							}
@@ -604,7 +632,7 @@ func (h *HugoSites) setupTranslations() {
 	for _, s := range h.Sites {
 		for _, p := range s.rawAllPages {
 			if p.Kind == kindUnknown {
-				p.Kind = p.s.kindFromSections(p.sections)
+				p.Kind = p.kindFromSections()
 			}
 
 			if !p.s.isEnabled(p.Kind) {

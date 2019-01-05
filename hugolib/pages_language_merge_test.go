@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gohugoio/hugo/resource"
+	"github.com/gohugoio/hugo/resources/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,7 +66,7 @@ func TestMergeLanguages(t *testing.T) {
 
 	firstNN := nnSite.RegularPages[0]
 	assert.Equal(4, len(firstNN.Sites()))
-	assert.Equal("en", firstNN.Sites().First().Language.Lang)
+	assert.Equal("en", firstNN.Sites().First().Language().Lang)
 
 	nnBundle := nnSite.getPage("page", "bundle")
 	enBundle := enSite.getPage("page", "bundle")

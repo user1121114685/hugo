@@ -197,13 +197,7 @@ func createTargetPath(d targetPathDescriptor) string {
 		if d.ExpandedPermalink != "" {
 			pagePath = filepath.Join(pagePath, d.ExpandedPermalink)
 		} else {
-			pagePath = ""
-			for i, section := range d.Sections {
-				if i > 0 {
-					pagePath += helpers.FilePathSeparator
-				}
-				pagePath += d.PathSpec.MakeSegment(section)
-			}
+			pagePath = filepath.Join(d.Sections...)
 		}
 		needsBase = false
 	}
@@ -310,7 +304,7 @@ func (p *Page) createRelativeTargetPathForOutputFormat(f output.Format) string {
 	}
 
 	// For /index.json etc. we must  use the full path.
-	if strings.HasSuffix(f.BaseFilename(), "html") {
+	if f.MediaType.FullSuffix() == ".html" && filepath.Base(tp) == "index.html" {
 		tp = strings.TrimSuffix(tp, f.BaseFilename())
 	}
 

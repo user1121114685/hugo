@@ -14,46 +14,93 @@
 package metadecoders
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/gohugoio/hugo/common/herrors"
 
 	"github.com/BurntSushi/toml"
 	"github.com/chaseadamsio/goorgeous"
 	"github.com/pkg/errors"
+	"github.com/spf13/afero"
 	"github.com/spf13/cast"
 	yaml "gopkg.in/yaml.v2"
 )
 
+// Decoder provides some configuration options for the decoders.
+type Decoder struct {
+	// Delimiter is the field delimiter used in the CSV decoder. It defaults to ','.
+	Delimiter rune
+
+	// Comment, if not 0, is the comment character ued in the CSV decoder. Lines beginning with the
+	// Comment character without preceding whitespace are ignored.
+	Comment rune
+}
+
+// OptionsKey is used in cache keys.
+func (d Decoder) OptionsKey() string {
+	var sb strings.Builder
+	sb.WriteRune(d.Delimiter)
+	sb.WriteRune(d.Comment)
+	return sb.String()
+}
+
+// Default is a Decoder in its default configuration.
+var Default = Decoder{
+	Delimiter: ',',
+}
+
 // UnmarshalToMap will unmarshall data in format f into a new map. This is
 // what's needed for Hugo's front matter decoding.
-func UnmarshalToMap(data []byte, f Format) (map[string]interface{}, error) {
+func (d Decoder) UnmarshalToMap(data []byte, f Format) (map[string]interface{}, error) {
 	m := make(map[string]interface{})
 	if data == nil {
 		return m, nil
 	}
 
-	err := unmarshal(data, f, &m)
+	err := d.unmarshal(data, f, &m)
 
 	return m, err
+}
 
+// UnmarshalFileToMap is the same as UnmarshalToMap, but reads the data from
+// the given filename.
+func (d Decoder) UnmarshalFileToMap(fs afero.Fs, filename string) (map[string]interface{}, error) {
+	format := FormatFromString(filename)
+	if format == "" {
+		return nil, errors.Errorf("%q is not a valid configuration format", filename)
+	}
+
+	data, err := afero.ReadFile(fs, filename)
+	if err != nil {
+		return nil, err
+	}
+	return d.UnmarshalToMap(data, format)
 }
 
 // Unmarshal will unmarshall data in format f into an interface{}.
 // This is what's needed for Hugo's /data handling.
-func Unmarshal(data []byte, f Format) (interface{}, error) {
+func (d Decoder) Unmarshal(data []byte, f Format) (interface{}, error) {
 	if data == nil {
-		return make(map[string]interface{}), nil
+		switch f {
+		case CSV:
+			return make([][]string, 0), nil
+		default:
+			return make(map[string]interface{}), nil
+		}
+
 	}
 	var v interface{}
-	err := unmarshal(data, f, &v)
+	err := d.unmarshal(data, f, &v)
 
 	return v, err
 }
 
 // unmarshal unmarshals data in format f into v.
-func unmarshal(data []byte, f Format, v interface{}) error {
+func (d Decoder) unmarshal(data []byte, f Format, v interface{}) error {
 
 	var err error
 
@@ -101,6 +148,9 @@ func unmarshal(data []byte, f Format, v interface{}) error {
 				*v.(*interface{}) = mm
 			}
 		}
+	case CSV:
+		return d.unmarshalCSV(data, v)
+
 	default:
 		return errors.Errorf("unmarshal of format %q is not supported", f)
 	}
@@ -110,6 +160,28 @@ func unmarshal(data []byte, f Format, v interface{}) error {
 	}
 
 	return toFileError(f, errors.Wrap(err, "unmarshal failed"))
+
+}
+
+func (d Decoder) unmarshalCSV(data []byte, v interface{}) error {
+	r := csv.NewReader(bytes.NewReader(data))
+	r.Comma = d.Delimiter
+	r.Comment = d.Comment
+
+	records, err := r.ReadAll()
+	if err != nil {
+		return err
+	}
+
+	switch v.(type) {
+	case *interface{}:
+		*v.(*interface{}) = records
+	default:
+		return errors.Errorf("CSV cannot be unmarshaled into %T", v)
+
+	}
+
+	return nil
 
 }
 

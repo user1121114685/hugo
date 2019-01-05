@@ -11,14 +11,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gohugoio/hugo/langs"
-
 	"github.com/fortytw2/leaktest"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugofs"
 	"github.com/spf13/afero"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,8 +100,8 @@ func doTestMultiSitesMainLangInRoot(t *testing.T, defaultInSubDir bool) {
 	// Check list pages
 	b.AssertFileContent(pathMod("public/fr/sect/index.html"), "List", "Bonjour")
 	b.AssertFileContent("public/en/sect/index.html", "List", "Hello")
-	b.AssertFileContent(pathMod("public/fr/plaques/frtag1/index.html"), "List", "Bonjour")
-	b.AssertFileContent("public/en/tags/tag1/index.html", "List", "Hello")
+	b.AssertFileContent(pathMod("public/fr/plaques/frtag1/index.html"), "Taxonomy List", "Bonjour")
+	b.AssertFileContent("public/en/tags/tag1/index.html", "Taxonomy List", "Hello")
 
 	// Check sitemaps
 	// Sitemaps behaves different: In a multilanguage setup there will always be a index file and
@@ -661,9 +658,8 @@ title = "Svenska"
 
 	sites := b.H
 
-	// Watching does not work with in-memory fs, so we trigger a reload manually
-	assert.NoError(sites.Cfg.(*langs.Language).Cfg.(*viper.Viper).ReadInConfig())
-	err := b.H.Build(BuildCfg{CreateSitesFromConfig: true})
+	assert.NoError(b.LoadConfig())
+	err := b.H.Build(BuildCfg{NewConfig: b.Cfg})
 
 	if err != nil {
 		t.Fatalf("Failed to rebuild sites: %s", err)
@@ -723,10 +719,9 @@ func TestChangeDefaultLanguage(t *testing.T) {
 		"DefaultContentLanguageInSubdir": false,
 	})
 
-	// Watching does not work with in-memory fs, so we trigger a reload manually
-	// This does not look pretty, so we should think of something else.
-	assert.NoError(b.H.Cfg.(*langs.Language).Cfg.(*viper.Viper).ReadInConfig())
-	err := b.H.Build(BuildCfg{CreateSitesFromConfig: true})
+	assert.NoError(b.LoadConfig())
+	err := b.H.Build(BuildCfg{NewConfig: b.Cfg})
+
 	if err != nil {
 		t.Fatalf("Failed to rebuild sites: %s", err)
 	}

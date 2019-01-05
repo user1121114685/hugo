@@ -25,7 +25,7 @@ import (
 	"github.com/gohugoio/hugo/hugofs"
 
 	"github.com/gohugoio/hugo/common/loggers"
-	"github.com/gohugoio/hugo/resource/tocss/scss"
+	"github.com/gohugoio/hugo/resources/resource_transformers/tocss/scss"
 )
 
 func TestSCSSWithIncludePaths(t *testing.T) {
@@ -168,6 +168,8 @@ T1: {{ $r.Content }}
 func TestResourceChain(t *testing.T) {
 	t.Parallel()
 
+	assert := require.New(t)
+
 	tests := []struct {
 		name      string
 		shouldRun func() bool
@@ -199,7 +201,7 @@ T6: {{ $bundle1.Permalink }}
 			b.AssertFileContent("public/index.html", `T5 RelPermalink: /sass/styles3.css|`)
 			b.AssertFileContent("public/index.html", `T6: http://example.com/styles/bundle1.css`)
 
-			b.AssertFileContent("public/styles/templ.min.css", `.home{color:blue}`)
+			assert.False(b.CheckExists("public/styles/templ.min.css"))
 			b.AssertFileContent("public/styles/bundle1.css", `.home{color:blue}body{color:#333}`)
 
 		}},
@@ -311,6 +313,48 @@ T1: {{ $r1.Permalink }}|{{ $r1.RelPermalink }}
 		}, func(b *sitesBuilder) {
 			b.AssertFileContent("public/index.html", `T1: https://example.com/hugo/rocks/hugo.txt|/hugo/rocks/hugo.txt`)
 
+		}},
+
+		// https://github.com/gohugoio/hugo/issues/4944
+		{"Prevent resource publish on .Content only", func() bool { return true }, func(b *sitesBuilder) {
+			b.WithTemplates("home.html", `
+{{ $cssInline := "body { color: green; }" | resources.FromString "inline.css" | minify }}
+{{ $cssPublish1 := "body { color: blue; }" | resources.FromString "external1.css" | minify }}
+{{ $cssPublish2 := "body { color: orange; }" | resources.FromString "external2.css" | minify }}
+
+Inline: {{ $cssInline.Content }}
+Publish 1: {{ $cssPublish1.Content }} {{ $cssPublish1.RelPermalink }}
+Publish 2: {{ $cssPublish2.Permalink }}
+`)
+
+		}, func(b *sitesBuilder) {
+			b.AssertFileContent("public/index.html",
+				`Inline: body{color:green}`,
+				"Publish 1: body{color:blue} /external1.min.css",
+				"Publish 2: http://example.com/external2.min.css",
+			)
+			assert.True(b.CheckExists("public/external2.min.css"), "Referenced content should be copied to /public")
+			assert.True(b.CheckExists("public/external1.min.css"), "Referenced content should be copied to /public")
+
+			assert.False(b.CheckExists("public/inline.min.css"), "Inline content should not be copied to /public")
+		}},
+
+		{"unmarshal", func() bool { return true }, func(b *sitesBuilder) {
+			b.WithTemplates("home.html", `
+{{ $toml := "slogan = \"Hugo Rocks!\"" | resources.FromString "slogan.toml" | transform.Unmarshal }}
+{{ $csv1 := "\"Hugo Rocks\",\"Hugo is Fast!\"" | resources.FromString "slogans.csv" | transform.Unmarshal }}
+{{ $csv2 := "a;b;c" | transform.Unmarshal (dict "delimiter" ";") }}
+
+Slogan: {{ $toml.slogan }}
+CSV1: {{ $csv1 }} {{ len (index $csv1 0)  }}
+CSV2: {{ $csv2 }}		
+`)
+		}, func(b *sitesBuilder) {
+			b.AssertFileContent("public/index.html",
+				`Slogan: Hugo Rocks!`,
+				`[[Hugo Rocks Hugo is Fast!]] 2`,
+				`CSV2: [[a b c]]`,
+			)
 		}},
 
 		{"template", func() bool { return true }, func(b *sitesBuilder) {}, func(b *sitesBuilder) {

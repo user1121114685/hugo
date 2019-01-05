@@ -77,17 +77,6 @@ func (filepathBridge) Separator() string {
 
 var fpb filepathBridge
 
-// segmentReplacer replaces some URI-reserved characters in a path segments.
-var segmentReplacer = strings.NewReplacer("/", "-", "#", "-")
-
-// MakeSegment returns a copy of string s that is appropriate for a path
-// segment.  MakeSegment is similar to MakePath but disallows the '/' and
-// '#' characters because of their reserved meaning in URIs.
-func (p *PathSpec) MakeSegment(s string) string {
-	return p.MakePathSanitized(segmentReplacer.Replace(s))
-
-}
-
 // MakePath takes a string with any characters and replace it
 // so the string could be used in a path.
 // It does so by creating a Unicode-sanitized string, with the spaces replaced,
@@ -274,6 +263,13 @@ func FileAndExt(in string) (string, string) {
 	return fileAndExt(in, fpb)
 }
 
+// FileAndExtNoDelimiter takes a path and returns the file and extension separated,
+// the extension excluding the delmiter, e.g "md".
+func FileAndExtNoDelimiter(in string) (string, string) {
+	file, ext := fileAndExt(in, fpb)
+	return file, strings.TrimPrefix(ext, ".")
+}
+
 // Filename takes a path, strips out the extension,
 // and returns the name of the file.
 func Filename(in string) (name string) {
@@ -399,6 +395,8 @@ func ExtractRootPaths(paths []string) []string {
 	return r
 
 }
+
+var numInPathRe = regexp.MustCompile("\\.(\\d+)\\.")
 
 // FindCWD returns the current working directory from where the Hugo
 // executable is run.

@@ -21,6 +21,8 @@ import (
 	"math/rand"
 	"reflect"
 
+	"github.com/gohugoio/hugo/common/hugo"
+
 	"github.com/gohugoio/hugo/common/maps"
 	"github.com/gohugoio/hugo/common/urls"
 	"github.com/gohugoio/hugo/media"
@@ -33,7 +35,7 @@ import (
 
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugolib/pagemeta"
-	"github.com/gohugoio/hugo/resource"
+	"github.com/gohugoio/hugo/resources/resource"
 
 	"github.com/gohugoio/hugo/output"
 	"github.com/mitchellh/mapstructure"
@@ -367,12 +369,7 @@ func (p *Page) Summary() template.HTML {
 
 // Sites is a convenience method to get all the Hugo sites/languages configured.
 func (p *Page) Sites() SiteInfos {
-	infos := make(SiteInfos, len(p.s.owner.Sites))
-	for i, site := range p.s.owner.Sites {
-		infos[i] = &site.Info
-	}
-
-	return infos
+	return p.s.owner.siteInfos()
 }
 
 // SearchKeywords implements the related.Document interface needed for fast page searches.
@@ -1650,7 +1647,12 @@ func (p *Page) Menus() PageMenus {
 	p.pageMenusInit.Do(func() {
 		p.pageMenus = PageMenus{}
 
-		if ms, ok := p.params["menu"]; ok {
+		ms, ok := p.params["menus"]
+		if !ok {
+			ms, ok = p.params["menu"]
+		}
+
+		if ok {
 			link := p.RelPermalink()
 
 			me := MenuEntry{Page: p, Name: p.LinkTitle(), Weight: p.Weight, URL: link}
@@ -1873,8 +1875,8 @@ func (p *Page) copy(initContent bool) *Page {
 	return &c
 }
 
-func (p *Page) Hugo() *HugoInfo {
-	return hugoInfo
+func (p *Page) Hugo() hugo.Info {
+	return p.s.Info.hugoInfo
 }
 
 // GetPage looks up a page for the given ref.
@@ -2046,10 +2048,41 @@ func kindFromFileInfo(fi *fileInfo) string {
 	return KindPage
 }
 
+func (p *Page) sectionsPath() string {
+	if len(p.sections) == 0 {
+		return ""
+	}
+	if len(p.sections) == 1 {
+		return p.sections[0]
+	}
+
+	return path.Join(p.sections...)
+}
+
+func (p *Page) kindFromSections() string {
+	if len(p.sections) == 0 || len(p.s.Taxonomies) == 0 {
+		return KindSection
+	}
+
+	sectionPath := p.sectionsPath()
+
+	for k, _ := range p.s.Taxonomies {
+		if k == sectionPath {
+			return KindTaxonomyTerm
+		}
+
+		if strings.HasPrefix(sectionPath, k) {
+			return KindTaxonomy
+		}
+	}
+
+	return KindSection
+}
+
 func (p *Page) setValuesForKind(s *Site) {
 	if p.Kind == kindUnknown {
 		// This is either a taxonomy list, taxonomy term or a section
-		nodeType := s.kindFromSections(p.sections)
+		nodeType := p.kindFromSections()
 
 		if nodeType == kindUnknown {
 			panic(fmt.Sprintf("Unable to determine page kind from %q", p.sections))

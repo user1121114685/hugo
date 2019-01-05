@@ -58,6 +58,7 @@ type ShortcodeWithPage struct {
 	Inner         template.HTML
 	Page          *PageWithoutContent
 	Parent        *ShortcodeWithPage
+	Name          string
 	IsNamedParams bool
 
 	// Zero-based ordinal in relation to its parent. If the parent is the page itself,
@@ -175,6 +176,16 @@ type shortcode struct {
 	err       error
 	doMarkup  bool
 	pos       int // the position in bytes in the source file
+}
+
+func (s shortcode) innerString() string {
+	var sb strings.Builder
+
+	for _, inner := range s.inner {
+		sb.WriteString(inner.(string))
+	}
+
+	return sb.String()
 }
 
 func (sc shortcode) String() string {
@@ -363,7 +374,7 @@ func renderShortcode(
 	if sc.isInline {
 		templName := path.Join("_inline_shortcode", p.Path(), sc.name)
 		if sc.isClosing {
-			templStr := sc.inner[0].(string)
+			templStr := sc.innerString()
 
 			var err error
 			tmpl, err = p.s.TextTmpl.Parse(templName, templStr)
@@ -391,7 +402,7 @@ func renderShortcode(
 		return "", nil
 	}
 
-	data := &ShortcodeWithPage{Ordinal: sc.ordinal, posOffset: sc.pos, Params: sc.params, Page: p, Parent: parent}
+	data := &ShortcodeWithPage{Ordinal: sc.ordinal, posOffset: sc.pos, Params: sc.params, Page: p, Parent: parent, Name: sc.name}
 	if sc.params != nil {
 		data.IsNamedParams = reflect.TypeOf(sc.params).Kind() == reflect.Map
 	}

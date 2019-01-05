@@ -36,11 +36,10 @@ import (
 
 	"github.com/gohugoio/hugo/common/herrors"
 
-	_errors "github.com/pkg/errors"
-
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/common/maps"
 	"github.com/gohugoio/hugo/publisher"
-	"github.com/gohugoio/hugo/resource"
+	_errors "github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/langs"
 
@@ -62,6 +61,7 @@ import (
 	"github.com/gohugoio/hugo/hugolib/pagemeta"
 	"github.com/gohugoio/hugo/output"
 	"github.com/gohugoio/hugo/related"
+	"github.com/gohugoio/hugo/resources"
 	"github.com/gohugoio/hugo/source"
 	"github.com/gohugoio/hugo/tpl"
 	"github.com/spf13/afero"
@@ -388,7 +388,7 @@ type SiteInfo struct {
 	Social     SiteSocial
 	*PageCollections
 	Menus                          *Menus
-	Hugo                           *HugoInfo
+	hugoInfo                       hugo.Info
 	Title                          string
 	RSSLink                        string
 	Author                         map[string]interface{}
@@ -405,17 +405,29 @@ type SiteInfo struct {
 	Data                           *map[string]interface{}
 	owner                          *HugoSites
 	s                              *Site
-	Language                       *langs.Language
+	language                       *langs.Language
 	LanguagePrefix                 string
 	Languages                      langs.Languages
 	defaultContentLanguageInSubdir bool
 	sectionPagesMenu               string
 }
 
+func (s *SiteInfo) Language() *langs.Language {
+	return s.language
+}
+
 func (s *SiteInfo) Config() SiteConfig {
 	return s.s.siteConfig
 }
 
+func (s *SiteInfo) Hugo() hugo.Info {
+	return s.hugoInfo
+}
+
+// Sites is a convenience method to get all the Hugo sites/languages configured.
+func (s *SiteInfo) Sites() SiteInfos {
+	return s.s.owner.siteInfos()
+}
 func (s *SiteInfo) String() string {
 	return fmt.Sprintf("Site(%q)", s.Title)
 }
@@ -748,7 +760,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 	cachePartitions := make([]string, len(events))
 
 	for i, ev := range events {
-		cachePartitions[i] = resource.ResourceKeyPartition(ev.Name)
+		cachePartitions[i] = resources.ResourceKeyPartition(ev.Name)
 
 		if s.isContentDirEvent(ev) {
 			logger.Println("Source changed", ev)
@@ -797,7 +809,10 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 				MediaTypes:    site.mediaTypesConfig,
 				OutputFormats: site.outputFormatsConfig,
 			}
-			site.Deps, err = first.Deps.ForLanguage(depsCfg)
+			site.Deps, err = first.Deps.ForLanguage(depsCfg, func(d *deps.Deps) error {
+				d.Site = &site.Info
+				return nil
+			})
 			if err != nil {
 				return whatChanged{}, err
 			}
@@ -998,7 +1013,7 @@ func (s *Site) readData(f source.ReadableFile) (interface{}, error) {
 	content := helpers.ReaderToBytes(file)
 
 	format := metadecoders.FormatFromString(f.Extension())
-	return metadecoders.Unmarshal(content, format)
+	return metadecoders.Default.Unmarshal(content, format)
 }
 
 func (s *Site) readDataFromSourceFS() error {
@@ -1122,7 +1137,7 @@ func (s *Site) initialize() (err error) {
 func (s *SiteInfo) HomeAbsURL() string {
 	base := ""
 	if s.IsMultiLingual() {
-		base = s.Language.Lang
+		base = s.Language().Lang
 	}
 	return s.owner.AbsURL(base, false)
 }
@@ -1194,7 +1209,7 @@ func (s *Site) initializeSiteInfo() error {
 		Social:                         lang.GetStringMapString("social"),
 		LanguageCode:                   lang.GetString("languageCode"),
 		Copyright:                      lang.GetString("copyright"),
-		Language:                       lang,
+		language:                       lang,
 		LanguagePrefix:                 languagePrefix,
 		Languages:                      languages,
 		defaultContentLanguageInSubdir: defaultContentInSubDir,
@@ -1211,6 +1226,7 @@ func (s *Site) initializeSiteInfo() error {
 		Data:                           &s.Data,
 		owner:                          s.owner,
 		s:                              s,
+		hugoInfo:                       hugo.NewInfo(s.Cfg.GetString("environment")),
 		// TODO(bep) make this Menu and similar into delegate methods on SiteInfo
 		Taxonomies: s.Taxonomies,
 	}
@@ -1354,7 +1370,7 @@ func (s *Site) getMenusFromConfig() Menus {
 
 	ret := Menus{}
 
-	if menus := s.Language.GetStringMap("menu"); menus != nil {
+	if menus := s.Language.GetStringMap("menus"); menus != nil {
 		for name, menu := range menus {
 			m, err := cast.ToSliceE(menu)
 			if err != nil {
@@ -1570,20 +1586,6 @@ func (s *Site) resetBuildState() {
 	}
 }
 
-func (s *Site) kindFromSections(sections []string) string {
-	if len(sections) == 0 {
-		return KindSection
-	}
-
-	if _, isTaxonomy := s.Taxonomies[sections[0]]; isTaxonomy {
-		if len(sections) == 1 {
-			return KindTaxonomyTerm
-		}
-		return KindTaxonomy
-	}
-	return KindSection
-}
-
 func (s *Site) layouts(p *PageOutput) ([]string, error) {
 	return s.layoutHandler.For(p.layoutDescriptor, p.outputFormat)
 }
@@ -1612,36 +1614,6 @@ func (s *Site) errorCollator(results <-chan error, errs chan<- error) {
 	errs <- s.owner.pickOneAndLogTheRest(errors)
 
 	close(errs)
-}
-
-func (s *Site) appendThemeTemplates(in []string) []string {
-	if !s.PathSpec.ThemeSet() {
-		return in
-	}
-
-	out := []string{}
-	// First place all non internal templates
-	for _, t := range in {
-		if !strings.HasPrefix(t, "_internal/") {
-			out = append(out, t)
-		}
-	}
-
-	// Then place theme templates with the same names
-	for _, t := range in {
-		if !strings.HasPrefix(t, "_internal/") {
-			out = append(out, "theme/"+t)
-		}
-	}
-
-	// Lastly place internal templates
-	for _, t := range in {
-		if strings.HasPrefix(t, "_internal/") {
-			out = append(out, t)
-		}
-	}
-	return out
-
 }
 
 // GetPage looks up a page of a given type for the given ref.
